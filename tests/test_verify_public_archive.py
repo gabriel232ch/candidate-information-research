@@ -99,6 +99,17 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             self.verifier_output,
         )
 
+    def test_multiline_reference_label_relative_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[\nfoo\n]: missing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
     def test_link_shaped_text_in_fenced_code_blocks_is_ignored(self) -> None:
         (self.root / "README.md").write_text(
             "```markdown\n[inline](missing-inline.md)\n"

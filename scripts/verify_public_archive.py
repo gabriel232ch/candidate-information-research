@@ -231,35 +231,43 @@ def inline_link_targets(content: str) -> list[str]:
 
 
 def reference_link_targets(content: str) -> list[str]:
-    """Extract reference destinations with balanced, escape-aware labels."""
+    """Extract reference destinations with balanced, multiline labels."""
     targets = []
-    lines = content.splitlines()
-    for line_number, line in enumerate(lines):
-        label_start = 0
-        while label_start < len(line) and line[label_start].isspace():
+    line_start = 0
+    while line_start < len(content):
+        current_line_end = line_end(content, line_start)
+        label_start = line_start
+        while label_start < current_line_end and content[label_start] in " \t":
             label_start += 1
-        if label_start >= len(line) or line[label_start] != "[":
-            continue
-        index = link_label_end(line, label_start)
-        if index is None or index >= len(line) or line[index] != ":":
-            continue
-        index += 1
-        while index < len(line) and line[index].isspace():
-            index += 1
-        if index >= len(line):
-            if line_number + 1 >= len(lines):
-                continue
-            continuation = lines[line_number + 1]
-            indentation = len(continuation) - len(continuation.lstrip(" "))
-            if indentation not in (1, 2, 3):
-                continue
-            line = continuation
-            index = indentation
-            if index >= len(line):
-                continue
-        target, _ = markdown_destination(line, index)
-        if target is not None:
-            targets.append(target)
+        if label_start < current_line_end and content[label_start] == "[":
+            index = link_label_end(content, label_start)
+            if (
+                index is not None
+                and index < len(content)
+                and content[index] == ":"
+            ):
+                label_content = content[label_start + 1:index - 1]
+                has_blank_line = re.search(
+                    r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)",
+                    label_content,
+                )
+                if not has_blank_line:
+                    index += 1
+                    while index < len(content) and content[index] in " \t":
+                        index += 1
+                    if index >= len(content) or content[index] in "\r\n":
+                        continuation_start = line_end(content, index)
+                        continuation_end = line_end(content, continuation_start)
+                        continuation = content[continuation_start:continuation_end]
+                        indentation = len(continuation) - len(continuation.lstrip(" "))
+                        if indentation in (1, 2, 3):
+                            index = continuation_start + indentation
+                        else:
+                            index = len(content)
+                    target, _ = markdown_destination(content, index)
+                    if target is not None:
+                        targets.append(target)
+        line_start = current_line_end
     return targets
 
 
