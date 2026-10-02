@@ -122,6 +122,24 @@ class VerifyPublicArchiveTests(unittest.TestCase):
 
         self.assertEqual(self.verify(), 0)
 
+    def test_escaped_backticks_do_not_mask_relative_link(self) -> None:
+        (self.root / "README.md").write_text(
+            "\\` [missing](missing.md) \\`\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_escaped_backtick_does_not_close_inline_code_span(self) -> None:
+        (self.root / "README.md").write_text(
+            "`literal \\` [missing](missing.md) still code`\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 0)
+
     def test_link_shaped_text_in_html_comments_is_ignored(self) -> None:
         (self.root / "README.md").write_text(
             "<!-- [inline](missing-inline.md)\n"

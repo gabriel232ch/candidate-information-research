@@ -74,6 +74,14 @@ def mask_ignored_markdown(content: str) -> str:
     """Mask basic Markdown code and comment contexts before link extraction."""
     masked = list(content)
 
+    def preceded_by_odd_backslashes(index: int) -> bool:
+        backslash_count = 0
+        index -= 1
+        while index >= 0 and content[index] == "\\":
+            backslash_count += 1
+            index -= 1
+        return backslash_count % 2 == 1
+
     def mask(start: int, end: int) -> None:
         for index in range(start, end):
             if masked[index] not in "\r\n":
@@ -124,6 +132,8 @@ def mask_ignored_markdown(content: str) -> str:
         while index < len(masked) and masked[index] == "`":
             index += 1
         marker_length = index - opening_start
+        if preceded_by_odd_backslashes(opening_start):
+            continue
         closing_start = index
         while closing_start < len(masked):
             if masked[closing_start] != "`":
@@ -132,7 +142,10 @@ def mask_ignored_markdown(content: str) -> str:
             closing_end = closing_start
             while closing_end < len(masked) and masked[closing_end] == "`":
                 closing_end += 1
-            if closing_end - closing_start == marker_length:
+            if (
+                not preceded_by_odd_backslashes(closing_start)
+                and closing_end - closing_start == marker_length
+            ):
                 mask(opening_start, closing_end)
                 index = closing_end
                 break
