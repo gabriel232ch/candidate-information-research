@@ -405,7 +405,7 @@ def reference_link_targets(content: str) -> list[str]:
                         if (
                             same_quote_container
                             and no_new_list_container
-                            and continuation_indent in (1, 2, 3)
+                            and continuation_indent in (0, 1, 2, 3)
                         ):
                             index = continuation_prefix.content_start
                         else:

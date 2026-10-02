@@ -121,6 +121,39 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             self.verifier_output,
         )
 
+    def test_unindented_multiline_reference_destination_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[reference]:\nmissing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_list_multiline_reference_destination_at_container_baseline_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "- [reference]:\n  missing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_blockquote_multiline_reference_destination_at_container_baseline_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "> [reference]:\n> missing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
     def test_list_reference_definition_with_container_indented_destination_is_checked(self) -> None:
         (self.root / "README.md").write_text(
             "- [reference]:\n    refs/missing.md\n", encoding="utf-8"
