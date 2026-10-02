@@ -36,7 +36,8 @@ REQUIRED_FILES = (
 
 MARKDOWN_LINK_START = re.compile(r"!?\[[^\]]*\]\(")
 REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))", re.MULTILINE)
-PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|REPLACE_ME)\b")
+PLACEHOLDER_TOKENS = ("TO" + "DO", "T" + "BD", "REPLACE" + "_ME")
+PLACEHOLDER = re.compile(rf"\b(?:{'|'.join(PLACEHOLDER_TOKENS)})\b")
 
 
 def git_files(root: Path, include_untracked: bool) -> list[Path]:
@@ -104,10 +105,21 @@ def relative_link_errors(root: Path, markdown_files: list[Path]) -> list[str]:
     return errors
 
 
-def placeholder_errors(root: Path, markdown_files: list[Path]) -> list[str]:
+def placeholder_errors(root: Path, files: list[Path]) -> list[str]:
     errors = []
-    for source in markdown_files:
-        for match in PLACEHOLDER.finditer(source.read_text(encoding="utf-8")):
+    for source in files:
+        if not source.is_file():
+            continue
+        try:
+            content = source.read_text(encoding="utf-8")
+        except UnicodeError:
+            continue
+        except OSError as error:
+            errors.append(
+                f"cannot read archive text file: {source.relative_to(root)}: {error}"
+            )
+            continue
+        for match in PLACEHOLDER.finditer(content):
             errors.append(f"placeholder token: {source.relative_to(root)}: {match.group()}")
     return errors
 
@@ -129,7 +141,10 @@ def redaction_errors(root: Path, files: list[Path], pattern_file: Path | None) -
             continue
         try:
             content = source.read_text(encoding="utf-8")
-        except (UnicodeError, OSError):
+        except UnicodeError:
+            continue
+        except OSError as error:
+            errors.append(f"cannot read tracked file: {source.relative_to(root)}: {error}")
             continue
         for pattern in patterns:
             if pattern.search(content):
@@ -155,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     errors = [
         *required_path_errors(root),
         *relative_link_errors(root, markdown_files),
-        *placeholder_errors(root, markdown_files),
+        *placeholder_errors(root, files),
         *redaction_errors(root, tracked_files, args.redaction_file),
     ]
     for error in errors:
