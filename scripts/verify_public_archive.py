@@ -230,15 +230,69 @@ def inline_link_targets(content: str) -> list[str]:
     return targets
 
 
+def reference_line_content_start(
+    content: str, line_start: int, current_line_end: int
+) -> tuple[int, int] | None:
+    """Skip valid block quote/list prefixes and return content plus its indent."""
+    index = line_start
+    has_container = False
+    while index < current_line_end:
+        whitespace_start = index
+        while index < current_line_end and content[index] in " \t":
+            index += 1
+        indentation = index - whitespace_start
+
+        if content.startswith(">", index):
+            if indentation > 3:
+                return None
+            has_container = True
+            index += 1
+            if index < current_line_end and content[index] in " \t":
+                index += 1
+            continue
+
+        marker_end = index
+        if index < current_line_end and content[index] in "-+*":
+            marker_end = index + 1
+        elif index < current_line_end and content[index].isdigit():
+            while marker_end < current_line_end and content[marker_end].isdigit():
+                marker_end += 1
+            if (
+                marker_end - index > 9
+                or marker_end == current_line_end
+                or content[marker_end] not in ".)"
+            ):
+                marker_end = index
+            else:
+                marker_end += 1
+
+        if marker_end > index and marker_end < current_line_end and content[marker_end] in " \t":
+            if indentation > 3:
+                return None
+            padding_start = marker_end
+            while marker_end < current_line_end and content[marker_end] in " \t":
+                marker_end += 1
+            if marker_end - padding_start > 4:
+                return None
+            has_container = True
+            index = marker_end
+            continue
+
+        if has_container and indentation > 3:
+            return None
+        return index, indentation
+
+    return index, 0
+
+
 def reference_link_targets(content: str) -> list[str]:
     """Extract reference destinations with balanced, multiline labels."""
     targets = []
     line_start = 0
     while line_start < len(content):
         current_line_end = line_end(content, line_start)
-        label_start = line_start
-        while label_start < current_line_end and content[label_start] in " \t":
-            label_start += 1
+        line_prefix = reference_line_content_start(content, line_start, current_line_end)
+        label_start = line_prefix[0] if line_prefix is not None else current_line_end
         if label_start < current_line_end and content[label_start] == "[":
             index = link_label_end(content, label_start)
             if (
@@ -258,10 +312,16 @@ def reference_link_targets(content: str) -> list[str]:
                     if index >= len(content) or content[index] in "\r\n":
                         continuation_start = line_end(content, index)
                         continuation_end = line_end(content, continuation_start)
-                        continuation = content[continuation_start:continuation_end]
-                        indentation = len(continuation) - len(continuation.lstrip(" "))
+                        continuation_prefix = reference_line_content_start(
+                            content, continuation_start, continuation_end
+                        )
+                        indentation = (
+                            continuation_prefix[1]
+                            if continuation_prefix is not None
+                            else 0
+                        )
                         if indentation in (1, 2, 3):
-                            index = continuation_start + indentation
+                            index = continuation_prefix[0]
                         else:
                             index = len(content)
                     target, _ = markdown_destination(content, index)

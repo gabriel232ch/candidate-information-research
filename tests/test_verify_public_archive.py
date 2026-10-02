@@ -88,6 +88,28 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             self.verifier_output,
         )
 
+    def test_blockquote_reference_definition_relative_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "> [reference]: missing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_list_item_reference_definition_relative_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "- [reference]: missing-list.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing-list.md",
+            self.verifier_output,
+        )
+
     def test_multiline_reference_definition_relative_link_is_checked(self) -> None:
         (self.root / "README.md").write_text(
             "[source]:\n  missing.md\n", encoding="utf-8"
