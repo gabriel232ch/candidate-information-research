@@ -70,6 +70,74 @@ def link_label_end(content: str, label_start: int) -> int | None:
     return index if label_depth == 0 else None
 
 
+def mask_ignored_markdown(content: str) -> str:
+    """Mask basic Markdown code and comment contexts before link extraction."""
+    masked = list(content)
+
+    def mask(start: int, end: int) -> None:
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+
+    offset = 0
+    fence: tuple[str, int] | None = None
+    for line in content.splitlines(keepends=True):
+        line_without_ending = line.rstrip("\r\n")
+        fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})", line_without_ending)
+        if fence is None and fence_match:
+            marker = fence_match.group(1)
+            fence = (marker[0], len(marker))
+            mask(offset, offset + len(line))
+        elif fence is not None:
+            marker_character, marker_length = fence
+            closing = re.match(
+                rf"^ {{0,3}}({re.escape(marker_character)}{{{marker_length},}})[ \t]*$",
+                line_without_ending,
+            )
+            mask(offset, offset + len(line))
+            if closing:
+                fence = None
+        elif line.startswith("    ") or line.startswith("\t"):
+            mask(offset, offset + len(line))
+        offset += len(line)
+
+    searchable = "".join(masked)
+    comment_start = searchable.find("<!--")
+    while comment_start != -1:
+        comment_end = searchable.find("-->", comment_start + 4)
+        comment_end = len(searchable) if comment_end == -1 else comment_end + 3
+        mask(comment_start, comment_end)
+        searchable = "".join(masked)
+        comment_start = searchable.find("<!--", comment_end)
+
+    index = 0
+    while index < len(masked):
+        if masked[index] != "`":
+            index += 1
+            continue
+        opening_start = index
+        while index < len(masked) and masked[index] == "`":
+            index += 1
+        marker_length = index - opening_start
+        closing_start = index
+        while closing_start < len(masked):
+            if masked[closing_start] != "`":
+                closing_start += 1
+                continue
+            closing_end = closing_start
+            while closing_end < len(masked) and masked[closing_end] == "`":
+                closing_end += 1
+            if closing_end - closing_start == marker_length:
+                mask(opening_start, closing_end)
+                index = closing_end
+                break
+            closing_start = closing_end
+        else:
+            index = opening_start + marker_length
+
+    return "".join(masked)
+
+
 def inline_link_targets(content: str) -> list[str]:
     """Extract destinations with balanced labels and parentheses."""
     targets = []
@@ -126,7 +194,8 @@ def inline_link_targets(content: str) -> list[str]:
 def reference_link_targets(content: str) -> list[str]:
     """Extract reference destinations with balanced, escape-aware labels."""
     targets = []
-    for line in content.splitlines():
+    lines = content.splitlines()
+    for line_number, line in enumerate(lines):
         label_start = 0
         while label_start < len(line) and line[label_start].isspace():
             label_start += 1
@@ -139,7 +208,16 @@ def reference_link_targets(content: str) -> list[str]:
         while index < len(line) and line[index].isspace():
             index += 1
         if index >= len(line):
-            continue
+            if line_number + 1 >= len(lines):
+                continue
+            continuation = lines[line_number + 1]
+            indentation = len(continuation) - len(continuation.lstrip(" "))
+            if indentation not in (1, 2, 3):
+                continue
+            line = continuation
+            index = indentation
+            if index >= len(line):
+                continue
         if line[index] == "<":
             closing = line.find(">", index + 1)
             if closing != -1:
@@ -162,8 +240,9 @@ def relative_link_errors(root: Path, markdown_files: list[Path]) -> list[str]:
                 f"cannot read Markdown file: {source.relative_to(root)}: {error}"
             )
             continue
-        reference_targets = reference_link_targets(content)
-        for target in (*inline_link_targets(content), *reference_targets):
+        link_content = mask_ignored_markdown(content)
+        reference_targets = reference_link_targets(link_content)
+        for target in (*inline_link_targets(link_content), *reference_targets):
             try:
                 parsed = urlsplit(target)
             except ValueError as error:

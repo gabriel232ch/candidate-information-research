@@ -83,6 +83,54 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             self.verifier_output,
         )
 
+    def test_multiline_reference_definition_relative_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[source]:\n  missing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_link_shaped_text_in_fenced_code_blocks_is_ignored(self) -> None:
+        (self.root / "README.md").write_text(
+            "```markdown\n[inline](missing-inline.md)\n"
+            "[reference]: missing-reference.md\n```\n"
+            "~~~\n[tilde](missing-tilde.md)\n~~~\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.verify(), 0)
+
+    def test_link_shaped_text_in_indented_code_blocks_is_ignored(self) -> None:
+        (self.root / "README.md").write_text(
+            "    [inline](missing-inline.md)\n"
+            "    [reference]: missing-reference.md\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.verify(), 0)
+
+    def test_link_shaped_text_in_inline_code_spans_is_ignored(self) -> None:
+        (self.root / "README.md").write_text(
+            "Examples: `[inline](missing-inline.md)` and "
+            "``[reference]: missing-reference.md``.\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.verify(), 0)
+
+    def test_link_shaped_text_in_html_comments_is_ignored(self) -> None:
+        (self.root / "README.md").write_text(
+            "<!-- [inline](missing-inline.md)\n"
+            "[reference]: missing-reference.md -->\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.verify(), 0)
+
     def test_malformed_bracketed_url_fails_with_diagnostic(self) -> None:
         (self.root / "README.md").write_text(
             "[invalid](https://[host)\n", encoding="utf-8"
