@@ -121,6 +121,24 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             self.verifier_output,
         )
 
+    def test_list_reference_definition_with_container_indented_destination_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "- [reference]:\n    refs/missing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> refs/missing.md",
+            self.verifier_output,
+        )
+
+    def test_blockquote_reference_definition_does_not_take_prose_as_destination(self) -> None:
+        (self.root / "README.md").write_text(
+            "> [reference]:\n  ordinary prose\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 0)
+
     def test_multiline_reference_label_relative_link_is_checked(self) -> None:
         (self.root / "README.md").write_text(
             "[\nfoo\n]: missing.md\n", encoding="utf-8"
@@ -156,7 +174,16 @@ class VerifyPublicArchiveTests(unittest.TestCase):
     def test_link_shaped_text_in_indented_code_blocks_is_ignored(self) -> None:
         (self.root / "README.md").write_text(
             "    [inline](missing-inline.md)\n"
-            "    [reference]: missing-reference.md\n",
+            "    [reference]: missing-reference.md\n"
+            "\t[tab-indented](missing-tab.md)\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.verify(), 0)
+
+    def test_link_shaped_text_in_list_indented_code_block_is_ignored(self) -> None:
+        (self.root / "README.md").write_text(
+            "- list item\n      [inline](missing-inline.md)\n",
             encoding="utf-8",
         )
 

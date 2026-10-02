@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import subprocess
@@ -36,6 +37,23 @@ REQUIRED_FILES = (
 
 PLACEHOLDER_TOKENS = ("TO" + "DO", "T" + "BD", "REPLACE" + "_ME")
 PLACEHOLDER = re.compile(rf"\b(?:{'|'.join(PLACEHOLDER_TOKENS)})\b")
+
+
+@dataclass(frozen=True)
+class MarkdownLinePrefix:
+    content_start: int
+    indentation: int
+    blockquote_depth: int
+    list_content_indents: tuple[int, ...]
+    blockquote_content_indent: int
+
+
+def visual_column(content: str, start: int, end: int) -> int:
+    """Return the visual column after content[start:end], expanding tabs to stops of four."""
+    column = 0
+    for char in content[start:end]:
+        column += 4 - column % 4 if char == "\t" else 1
+    return column
 
 
 def git_files(root: Path, include_untracked: bool) -> list[Path]:
@@ -88,6 +106,8 @@ def line_end(content: str, start: int) -> int:
 def mask_ignored_markdown(content: str) -> str:
     """Mask basic Markdown code and comment contexts before link extraction."""
     masked = list(content)
+    active_list_content_indent: int | None = None
+    active_list_blockquote_depth: int | None = None
 
     def preceded_by_odd_backslashes(index: int) -> bool:
         backslash_count = 0
@@ -109,6 +129,21 @@ def mask_ignored_markdown(content: str) -> str:
 
         if at_line_start:
             line = content[index:current_line_end].rstrip("\r\n")
+            line_prefix = reference_line_content_start(content, index, current_line_end)
+            if line_prefix is not None:
+                if line_prefix.list_content_indents:
+                    active_list_content_indent = (
+                        max(line_prefix.list_content_indents)
+                        - line_prefix.blockquote_content_indent
+                    )
+                    active_list_blockquote_depth = line_prefix.blockquote_depth
+                elif active_list_content_indent is not None and (
+                    line_prefix.blockquote_depth != active_list_blockquote_depth
+                    or line_prefix.indentation < active_list_content_indent
+                ):
+                    active_list_content_indent = None
+                    active_list_blockquote_depth = None
+
             fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
             if fence_match:
                 marker = fence_match.group(1)
@@ -128,7 +163,16 @@ def mask_ignored_markdown(content: str) -> str:
                     mask(index, fence_end)
                     index = fence_end
                     continue
-            if content.startswith(("    ", "\t"), index):
+            indentation = line_prefix.indentation if line_prefix is not None else 0
+            code_indent = (
+                active_list_content_indent + 4
+                if active_list_content_indent is not None
+                else 4
+            )
+            if (
+                content.startswith(("    ", "\t"), index)
+                and indentation >= code_indent
+            ):
                 mask(index, current_line_end)
                 index = current_line_end
                 continue
@@ -232,23 +276,31 @@ def inline_link_targets(content: str) -> list[str]:
 
 def reference_line_content_start(
     content: str, line_start: int, current_line_end: int
-) -> tuple[int, int] | None:
+) -> MarkdownLinePrefix | None:
     """Skip valid block quote/list prefixes and return content plus its indent."""
     index = line_start
     has_container = False
+    blockquote_depth = 0
+    list_content_indents = []
+    blockquote_content_indent = 0
     while index < current_line_end:
         whitespace_start = index
         while index < current_line_end and content[index] in " \t":
             index += 1
-        indentation = index - whitespace_start
+        indentation = (
+            visual_column(content, line_start, index)
+            - visual_column(content, line_start, whitespace_start)
+        )
 
         if content.startswith(">", index):
             if indentation > 3:
                 return None
             has_container = True
+            blockquote_depth += 1
             index += 1
             if index < current_line_end and content[index] in " \t":
                 index += 1
+            blockquote_content_indent = visual_column(content, line_start, index)
             continue
 
         marker_end = index
@@ -275,14 +327,27 @@ def reference_line_content_start(
             if marker_end - padding_start > 4:
                 return None
             has_container = True
+            list_content_indents.append(visual_column(content, line_start, marker_end))
             index = marker_end
             continue
 
         if has_container and indentation > 3:
             return None
-        return index, indentation
+        return MarkdownLinePrefix(
+            index,
+            indentation,
+            blockquote_depth,
+            tuple(list_content_indents),
+            blockquote_content_indent,
+        )
 
-    return index, 0
+    return MarkdownLinePrefix(
+        index,
+        0,
+        blockquote_depth,
+        tuple(list_content_indents),
+        blockquote_content_indent,
+    )
 
 
 def reference_link_targets(content: str) -> list[str]:
@@ -292,7 +357,9 @@ def reference_link_targets(content: str) -> list[str]:
     while line_start < len(content):
         current_line_end = line_end(content, line_start)
         line_prefix = reference_line_content_start(content, line_start, current_line_end)
-        label_start = line_prefix[0] if line_prefix is not None else current_line_end
+        label_start = (
+            line_prefix.content_start if line_prefix is not None else current_line_end
+        )
         if label_start < current_line_end and content[label_start] == "[":
             index = link_label_end(content, label_start)
             if (
@@ -315,13 +382,32 @@ def reference_link_targets(content: str) -> list[str]:
                         continuation_prefix = reference_line_content_start(
                             content, continuation_start, continuation_end
                         )
-                        indentation = (
-                            continuation_prefix[1]
+                        list_indent = (
+                            max(
+                                line_prefix.list_content_indents,
+                                default=line_prefix.blockquote_content_indent,
+                            )
+                            - line_prefix.blockquote_content_indent
+                        )
+                        continuation_indent = (
+                            continuation_prefix.indentation - list_indent
                             if continuation_prefix is not None
                             else 0
                         )
-                        if indentation in (1, 2, 3):
-                            index = continuation_prefix[0]
+                        same_quote_container = (
+                            continuation_prefix is not None
+                            and continuation_prefix.blockquote_depth == line_prefix.blockquote_depth
+                        )
+                        no_new_list_container = (
+                            continuation_prefix is not None
+                            and not continuation_prefix.list_content_indents
+                        )
+                        if (
+                            same_quote_container
+                            and no_new_list_container
+                            and continuation_indent in (1, 2, 3)
+                        ):
+                            index = continuation_prefix.content_start
                         else:
                             index = len(content)
                     target, _ = markdown_destination(content, index)
