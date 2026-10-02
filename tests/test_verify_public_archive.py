@@ -61,6 +61,39 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             self.verifier_output,
         )
 
+    def test_escaped_bracket_reference_label_relative_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[review \\]]: missing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_nested_bracket_reference_label_relative_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[outer [inner]]: missing.md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_malformed_bracketed_url_fails_with_diagnostic(self) -> None:
+        (self.root / "README.md").write_text(
+            "[invalid](https://[host)\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "invalid Markdown link: README.md -> https://[host:",
+            self.verifier_output,
+        )
+
     def test_markdown_read_error_fails_with_diagnostic(self) -> None:
         markdown_file = self.root / "README.md"
         original_read_text = Path.read_text

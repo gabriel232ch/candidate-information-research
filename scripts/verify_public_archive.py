@@ -34,7 +34,6 @@ REQUIRED_FILES = (
     "tests/test_verify_public_archive.py",
 )
 
-REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))", re.MULTILINE)
 PLACEHOLDER_TOKENS = ("TO" + "DO", "T" + "BD", "REPLACE" + "_ME")
 PLACEHOLDER = re.compile(rf"\b(?:{'|'.join(PLACEHOLDER_TOKENS)})\b")
 
@@ -54,6 +53,23 @@ def required_path_errors(root: Path) -> list[str]:
     return [f"missing required file: {name}" for name in REQUIRED_FILES if not (root / name).is_file()]
 
 
+def link_label_end(content: str, label_start: int) -> int | None:
+    """Return the index after a balanced, escape-aware Markdown label."""
+    index = label_start + 1
+    label_depth = 1
+    while index < len(content) and label_depth:
+        char = content[index]
+        if char == "\\" and index + 1 < len(content):
+            index += 2
+            continue
+        if char == "[":
+            label_depth += 1
+        elif char == "]":
+            label_depth -= 1
+        index += 1
+    return index if label_depth == 0 else None
+
+
 def inline_link_targets(content: str) -> list[str]:
     """Extract destinations with balanced labels and parentheses."""
     targets = []
@@ -69,19 +85,8 @@ def inline_link_targets(content: str) -> list[str]:
             content_index += 1
             continue
 
-        index = label_start + 1
-        label_depth = 1
-        while index < len(content) and label_depth:
-            char = content[index]
-            if char == "\\" and index + 1 < len(content):
-                index += 2
-                continue
-            if char == "[":
-                label_depth += 1
-            elif char == "]":
-                label_depth -= 1
-            index += 1
-        if label_depth or index >= len(content) or content[index] != "(":
+        index = link_label_end(content, label_start)
+        if index is None or index >= len(content) or content[index] != "(":
             content_index = label_start + 1
             continue
 
@@ -118,6 +123,35 @@ def inline_link_targets(content: str) -> list[str]:
     return targets
 
 
+def reference_link_targets(content: str) -> list[str]:
+    """Extract reference destinations with balanced, escape-aware labels."""
+    targets = []
+    for line in content.splitlines():
+        label_start = 0
+        while label_start < len(line) and line[label_start].isspace():
+            label_start += 1
+        if label_start >= len(line) or line[label_start] != "[":
+            continue
+        index = link_label_end(line, label_start)
+        if index is None or index >= len(line) or line[index] != ":":
+            continue
+        index += 1
+        while index < len(line) and line[index].isspace():
+            index += 1
+        if index >= len(line):
+            continue
+        if line[index] == "<":
+            closing = line.find(">", index + 1)
+            if closing != -1:
+                targets.append(line[index + 1:closing])
+            continue
+        closing = index
+        while closing < len(line) and not line[closing].isspace():
+            closing += 1
+        targets.append(line[index:closing])
+    return targets
+
+
 def relative_link_errors(root: Path, markdown_files: list[Path]) -> list[str]:
     errors = []
     for source in markdown_files:
@@ -128,9 +162,15 @@ def relative_link_errors(root: Path, markdown_files: list[Path]) -> list[str]:
                 f"cannot read Markdown file: {source.relative_to(root)}: {error}"
             )
             continue
-        reference_targets = [match.group(1) or match.group(2) for match in REFERENCE_LINK.finditer(content)]
+        reference_targets = reference_link_targets(content)
         for target in (*inline_link_targets(content), *reference_targets):
-            parsed = urlsplit(target)
+            try:
+                parsed = urlsplit(target)
+            except ValueError as error:
+                errors.append(
+                    f"invalid Markdown link: {source.relative_to(root)} -> {target}: {error}"
+                )
+                continue
             if parsed.scheme or parsed.netloc or not parsed.path or parsed.path.startswith("/"):
                 continue
             destination = (source.parent / unquote(parsed.path)).resolve()
