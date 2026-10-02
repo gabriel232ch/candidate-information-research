@@ -34,7 +34,6 @@ REQUIRED_FILES = (
     "tests/test_verify_public_archive.py",
 )
 
-MARKDOWN_LINK_START = re.compile(r"!?\[[^\]]*\]\(")
 REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))", re.MULTILINE)
 PLACEHOLDER_TOKENS = ("TO" + "DO", "T" + "BD", "REPLACE" + "_ME")
 PLACEHOLDER = re.compile(rf"\b(?:{'|'.join(PLACEHOLDER_TOKENS)})\b")
@@ -56,14 +55,42 @@ def required_path_errors(root: Path) -> list[str]:
 
 
 def inline_link_targets(content: str) -> list[str]:
-    """Extract destinations with balanced or escaped parentheses."""
+    """Extract destinations with balanced labels and parentheses."""
     targets = []
-    for match in MARKDOWN_LINK_START.finditer(content):
-        index = match.end()
+    content_index = 0
+    while content_index < len(content):
+        if content[content_index] == "\\":
+            content_index += 2
+            continue
+        label_start = content_index
+        if content[content_index] == "!":
+            label_start += 1
+        if label_start >= len(content) or content[label_start] != "[":
+            content_index += 1
+            continue
+
+        index = label_start + 1
+        label_depth = 1
+        while index < len(content) and label_depth:
+            char = content[index]
+            if char == "\\" and index + 1 < len(content):
+                index += 2
+                continue
+            if char == "[":
+                label_depth += 1
+            elif char == "]":
+                label_depth -= 1
+            index += 1
+        if label_depth or index >= len(content) or content[index] != "(":
+            content_index = label_start + 1
+            continue
+
+        index += 1
         if index < len(content) and content[index] == "<":
             closing = content.find(">", index + 1)
             if closing != -1:
                 targets.append(content[index + 1:closing])
+            content_index = closing + 1 if closing != -1 else index + 1
             continue
         depth = 0
         destination = []
@@ -87,13 +114,20 @@ def inline_link_targets(content: str) -> list[str]:
             index += 1
         if destination and depth == 0:
             targets.append("".join(destination))
+        content_index = index + 1
     return targets
 
 
 def relative_link_errors(root: Path, markdown_files: list[Path]) -> list[str]:
     errors = []
     for source in markdown_files:
-        content = source.read_text(encoding="utf-8")
+        try:
+            content = source.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            errors.append(
+                f"cannot read Markdown file: {source.relative_to(root)}: {error}"
+            )
+            continue
         reference_targets = [match.group(1) or match.group(2) for match in REFERENCE_LINK.finditer(content)]
         for target in (*inline_link_targets(content), *reference_targets):
             parsed = urlsplit(target)

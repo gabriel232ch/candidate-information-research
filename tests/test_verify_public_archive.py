@@ -23,7 +23,11 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             path.write_text("# Public archive\n", encoding="utf-8")
 
     def verify(self, *extra_args: str) -> int:
-        return main(["--root", str(self.root), *extra_args])
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = main(["--root", str(self.root), *extra_args])
+        self.verifier_output = output.getvalue()
+        return result
 
     def test_missing_required_file_fails(self) -> None:
         (self.root / "README.md").unlink()
@@ -34,6 +38,55 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             "[missing](research/no_such_file.md)\n", encoding="utf-8"
         )
         self.assertEqual(self.verify(), 1)
+
+    def test_escaped_bracket_label_relative_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[review \\]](missing.md)\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_nested_bracket_label_relative_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[outer [inner]](missing.md)\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+    def test_markdown_read_error_fails_with_diagnostic(self) -> None:
+        markdown_file = self.root / "README.md"
+        original_read_text = Path.read_text
+
+        def read_text(source: Path, *args: object, **kwargs: object) -> str:
+            if source.resolve() == markdown_file.resolve():
+                raise OSError("simulated Markdown read failure")
+            return original_read_text(source, *args, **kwargs)
+
+        with patch.object(Path, "read_text", new=read_text):
+            result = self.verify()
+
+        self.assertEqual(result, 1)
+        self.assertIn(
+            "cannot read Markdown file: README.md: simulated Markdown read failure",
+            self.verifier_output,
+        )
+
+    def test_non_utf8_markdown_fails_with_diagnostic(self) -> None:
+        (self.root / "README.md").write_bytes(b"\xff\xfe")
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "cannot read Markdown file: README.md:",
+            self.verifier_output,
+        )
 
     def test_placeholder_token_fails(self) -> None:
         (self.root / "README.md").write_text(
@@ -83,13 +136,11 @@ class VerifyPublicArchiveTests(unittest.TestCase):
                 raise OSError("simulated read failure")
             return original_read_text(source, *args, **kwargs)
 
-        output = io.StringIO()
         with patch.object(Path, "read_text", new=read_text):
-            with redirect_stdout(output):
-                result = self.verify("--redaction-file", str(redaction_file))
+            result = self.verify("--redaction-file", str(redaction_file))
 
         self.assertEqual(result, 1)
-        self.assertIn("cannot read tracked file: tracked-notes.txt", output.getvalue())
+        self.assertIn("cannot read tracked file: tracked-notes.txt", self.verifier_output)
 
     def test_parenthesized_relative_markdown_link_is_checked(self) -> None:
         (self.root / "README.md").write_text(
