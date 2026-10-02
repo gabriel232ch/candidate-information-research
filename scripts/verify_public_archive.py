@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import subprocess
+import unicodedata
 from urllib.parse import unquote, urlsplit
 
 
@@ -213,6 +214,8 @@ def mask_ignored_markdown(content: str) -> str:
 
 def markdown_destination(content: str, start: int) -> tuple[str | None, int]:
     """Parse one escape-aware Markdown destination starting at ``start``."""
+    while start < len(content) and content[start].isspace():
+        start += 1
     if start >= len(content):
         return None, start
     if content[start] == "<":
@@ -417,8 +420,50 @@ def reference_link_targets(content: str) -> list[str]:
     return targets
 
 
+def github_heading_anchors(content: str) -> set[str]:
+    """Find GitHub-style heading slugs and explicit HTML anchors in Markdown."""
+    masked = mask_ignored_markdown(content)
+    anchors: set[str] = set()
+    for raw_line, visible_line in zip(content.splitlines(), masked.splitlines()):
+        if not re.match(r"^ {0,3}#{1,6}[ \t]+", visible_line):
+            continue
+        heading = re.sub(r"^ {0,3}#{1,6}[ \t]+", "", raw_line)
+        heading = re.sub(r"[ \t]+#+[ \t]*$", "", heading).strip()
+        heading = re.sub(r"!?\[([^]]+)\]\([^)]*\)", r"\1", heading)
+        heading = re.sub(r"<[^>]+>", "", heading)
+        heading = re.sub(r"\\([\\`*_{}\[\]()#+.!>~-])", r"\1", heading)
+        heading = heading.translate(str.maketrans("", "", "*_`~"))
+        slug_chars = []
+        for char in heading:
+            if char == " ":
+                slug_chars.append("-")
+            elif char.isspace() or (
+                char != "-" and unicodedata.category(char).startswith("P")
+            ):
+                continue
+            else:
+                slug_chars.append(char.lower())
+        base_slug = "".join(slug_chars)
+        if not base_slug:
+            continue
+        slug = base_slug
+        occurrence = 0
+        while slug in anchors:
+            occurrence += 1
+            slug = f"{base_slug}-{occurrence}"
+        anchors.add(slug)
+    for match in re.finditer(
+        r'<a\s+[^>]*?\b(?:name|id)\s*=\s*(["\'])(.*?)\1[^>]*>',
+        masked,
+        re.IGNORECASE,
+    ):
+        anchors.add(match.group(2))
+    return anchors
+
+
 def relative_link_errors(root: Path, markdown_files: list[Path]) -> list[str]:
     errors = []
+    anchor_cache: dict[Path, set[str]] = {}
     for source in markdown_files:
         try:
             content = source.read_text(encoding="utf-8")
@@ -437,11 +482,33 @@ def relative_link_errors(root: Path, markdown_files: list[Path]) -> list[str]:
                     f"invalid Markdown link: {source.relative_to(root)} -> {target}: {error}"
                 )
                 continue
-            if parsed.scheme or parsed.netloc or not parsed.path or parsed.path.startswith("/"):
+            if parsed.scheme or parsed.netloc or parsed.path.startswith("/"):
                 continue
-            destination = (source.parent / unquote(parsed.path)).resolve()
+            if not parsed.path and not parsed.fragment:
+                continue
+            destination = (
+                (source.parent / unquote(parsed.path)).resolve()
+                if parsed.path else source.resolve()
+            )
             if not destination.is_relative_to(root.resolve()) or not destination.exists():
                 errors.append(f"broken relative Markdown link: {source.relative_to(root)} -> {target}")
+                continue
+            if not parsed.fragment or destination.suffix.lower() != ".md":
+                continue
+            if destination not in anchor_cache:
+                try:
+                    anchor_cache[destination] = github_heading_anchors(
+                        destination.read_text(encoding="utf-8")
+                    )
+                except (OSError, UnicodeError) as error:
+                    errors.append(
+                        f"cannot read Markdown file: {destination.relative_to(root)}: {error}"
+                    )
+                    continue
+            if unquote(parsed.fragment) not in anchor_cache[destination]:
+                errors.append(
+                    f"broken relative Markdown fragment: {source.relative_to(root)} -> {target}"
+                )
     return errors
 
 

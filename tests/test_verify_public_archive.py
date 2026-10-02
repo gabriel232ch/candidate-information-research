@@ -44,6 +44,75 @@ class VerifyPublicArchiveTests(unittest.TestCase):
         )
         self.assertEqual(self.verify(), 1)
 
+    def test_missing_relative_markdown_fragment_fails(self) -> None:
+        (self.root / "README.md").write_text(
+            "[missing](METHOD_EVOLUTION.md#missing-fragment)\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown fragment: README.md -> METHOD_EVOLUTION.md#missing-fragment",
+            self.verifier_output,
+        )
+
+    def test_punctuation_and_markup_in_heading_generate_github_fragment(self) -> None:
+        (self.root / "METHOD_EVOLUTION.md").write_text(
+            "## This'll be a _Helpful_ Section, About Θ!\n"
+            "## A name-with-a-hyphen\n",
+            encoding="utf-8",
+        )
+        (self.root / "README.md").write_text(
+            "[section](METHOD_EVOLUTION.md#thisll-be-a-helpful-section-about-θ)\n"
+            "[hyphen](METHOD_EVOLUTION.md#a-name-with-a-hyphen)\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.verify(), 0)
+
+    def test_duplicate_heading_requires_suffixed_fragment(self) -> None:
+        (self.root / "METHOD_EVOLUTION.md").write_text(
+            "## Repeated heading\n\n## Repeated heading\n", encoding="utf-8"
+        )
+        (self.root / "README.md").write_text(
+            "[second](METHOD_EVOLUTION.md#repeated-heading-1)\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.verify(), 0)
+
+        (self.root / "README.md").write_text(
+            "[third](METHOD_EVOLUTION.md#repeated-heading-2)\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.verify(), 1)
+
+    def test_same_file_fragment_resolves(self) -> None:
+        (self.root / "README.md").write_text(
+            "# Public archive\n\n[section](#public-archive)\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 0)
+
+    def test_explicit_html_anchor_resolves(self) -> None:
+        (self.root / "README.md").write_text(
+            '<a name="custom-point"></a>\n\n[point](#custom-point)\n',
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.verify(), 0)
+
+    def test_whitespace_after_inline_link_opening_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[missing]( missing.md )\n", encoding="utf-8"
+        )
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
+        (self.root / "missing.md").write_text("# Present\n", encoding="utf-8")
+        self.assertEqual(self.verify(), 0)
+
     def test_escaped_bracket_label_relative_link_is_checked(self) -> None:
         (self.root / "README.md").write_text(
             "[review \\]](missing.md)\n", encoding="utf-8"
