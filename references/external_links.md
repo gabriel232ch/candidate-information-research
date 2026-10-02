@@ -1,6 +1,6 @@
 # External links
 
-This is a navigation index of public web evidence cited in the research sections. Each link is a source for that organization's published material, not independent verification of employment experience or outcomes. For claim-level support and limits, use the [smaller-company source map](../research/01_smaller_high_impact_companies/sources.md) and [employer-case source register](../research/02_employer_brand_case_studies/sources.md).
+This is a navigation index of public web evidence cited in the research sections. The links include company-published pages, a company-controlled repository, regulatory filings, and one historical secondary report about IDEO; they do not independently verify employment experience or outcomes. For claim-level support and limits, use the [smaller-company source map](../research/01_smaller_high_impact_companies/sources.md) and [employer-case source register](../research/02_employer_brand_case_studies/sources.md).
 
 ## Smaller-company comparison
 
