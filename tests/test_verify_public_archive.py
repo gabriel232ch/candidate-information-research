@@ -44,7 +44,33 @@ class VerifyPublicArchiveTests(unittest.TestCase):
         )
         redaction_file = self.root / "redaction-patterns.txt"
         redaction_file.write_text("Sensitive example marker\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "README.md"], check=True)
         self.assertEqual(self.verify("--redaction-file", str(redaction_file)), 1)
+
+    def test_untracked_text_is_not_scanned_for_redaction_patterns(self) -> None:
+        redaction_file = self.root / "redaction-patterns.txt"
+        redaction_file.write_text("Sensitive example marker\n", encoding="utf-8")
+        (self.root / "draft.txt").write_text("Sensitive example marker\n", encoding="utf-8")
+        self.assertEqual(self.verify("--redaction-file", str(redaction_file)), 0)
+
+    def test_parenthesized_relative_markdown_link_is_checked(self) -> None:
+        (self.root / "README.md").write_text(
+            "[report](references/report_(final).md)\n", encoding="utf-8"
+        )
+        self.assertEqual(self.verify(), 1)
+        (self.root / "references/report_(final).md").write_text(
+            "# Report\n", encoding="utf-8"
+        )
+        self.assertEqual(self.verify(), 0)
+        (self.root / "README.md").write_text(
+            "[report](references/report_\\(final\\).md)\n", encoding="utf-8"
+        )
+        self.assertEqual(self.verify(), 0)
+        (self.root / "references/report_(final).md").unlink()
+        self.assertEqual(self.verify(), 1)
+
+    def test_complete_archive_passes(self) -> None:
+        self.assertEqual(self.verify(), 0)
 
 
 if __name__ == "__main__":

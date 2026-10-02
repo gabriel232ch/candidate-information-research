@@ -34,15 +34,16 @@ REQUIRED_FILES = (
     "tests/test_verify_public_archive.py",
 )
 
-MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)")
+MARKDOWN_LINK_START = re.compile(r"!?\[[^\]]*\]\(")
 REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))", re.MULTILINE)
 PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|REPLACE_ME)\b")
 
 
-def candidate_files(root: Path) -> list[Path]:
-    """List tracked and untracked nonignored files, including files before staging."""
+def git_files(root: Path, include_untracked: bool) -> list[Path]:
+    """List tracked files, optionally including nonignored files before staging."""
+    options = ["--cached", "--others", "--exclude-standard"] if include_untracked else ["--cached"]
     result = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        ["git", "-C", str(root), "ls-files", *options, "-z"],
         capture_output=True,
         check=True,
     )
@@ -53,12 +54,47 @@ def required_path_errors(root: Path) -> list[str]:
     return [f"missing required file: {name}" for name in REQUIRED_FILES if not (root / name).is_file()]
 
 
+def inline_link_targets(content: str) -> list[str]:
+    """Extract destinations with balanced or escaped parentheses."""
+    targets = []
+    for match in MARKDOWN_LINK_START.finditer(content):
+        index = match.end()
+        if index < len(content) and content[index] == "<":
+            closing = content.find(">", index + 1)
+            if closing != -1:
+                targets.append(content[index + 1:closing])
+            continue
+        depth = 0
+        destination = []
+        while index < len(content):
+            char = content[index]
+            if char == "\\" and index + 1 < len(content):
+                index += 1
+                destination.append(content[index])
+            elif char == "(":
+                depth += 1
+                destination.append(char)
+            elif char == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+                destination.append(char)
+            elif char.isspace() and depth == 0:
+                break
+            else:
+                destination.append(char)
+            index += 1
+        if destination and depth == 0:
+            targets.append("".join(destination))
+    return targets
+
+
 def relative_link_errors(root: Path, markdown_files: list[Path]) -> list[str]:
     errors = []
     for source in markdown_files:
         content = source.read_text(encoding="utf-8")
-        for match in (*MARKDOWN_LINK.finditer(content), *REFERENCE_LINK.finditer(content)):
-            target = match.group(1) or match.group(2)
+        reference_targets = [match.group(1) or match.group(2) for match in REFERENCE_LINK.finditer(content)]
+        for target in (*inline_link_targets(content), *reference_targets):
             parsed = urlsplit(target)
             if parsed.scheme or parsed.netloc or not parsed.path or parsed.path.startswith("/"):
                 continue
@@ -110,7 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         parser.error(f"archive root is not a directory: {root}")
     try:
-        files = candidate_files(root)
+        files = git_files(root, include_untracked=True)
+        tracked_files = git_files(root, include_untracked=False)
     except (OSError, subprocess.CalledProcessError) as error:
         print(f"cannot list archive files: {error}")
         return 1
@@ -119,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         *required_path_errors(root),
         *relative_link_errors(root, markdown_files),
         *placeholder_errors(root, markdown_files),
-        *redaction_errors(root, files, args.redaction_file),
+        *redaction_errors(root, tracked_files, args.redaction_file),
     ]
     for error in errors:
         print(error)
