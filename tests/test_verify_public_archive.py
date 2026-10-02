@@ -8,7 +8,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.verify_public_archive import REQUIRED_FILES, main
+from scripts.verify_public_archive import (
+    REQUIRED_FILES,
+    inline_link_targets,
+    main,
+    mask_ignored_markdown,
+)
 
 
 class VerifyPublicArchiveTests(unittest.TestCase):
@@ -104,6 +109,17 @@ class VerifyPublicArchiveTests(unittest.TestCase):
 
         self.assertEqual(self.verify(), 0)
 
+    def test_backtick_in_fence_info_string_does_not_open_fence(self) -> None:
+        (self.root / "README.md").write_text(
+            "```info`\n[missing](missing.md)\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
     def test_link_shaped_text_in_indented_code_blocks_is_ignored(self) -> None:
         (self.root / "README.md").write_text(
             "    [inline](missing-inline.md)\n"
@@ -112,6 +128,16 @@ class VerifyPublicArchiveTests(unittest.TestCase):
         )
 
         self.assertEqual(self.verify(), 0)
+
+    def test_cr_only_line_endings_end_indented_code_mask_at_line_boundary(self) -> None:
+        for line_ending in ("\n", "\r\n", "\r"):
+            with self.subTest(line_ending=repr(line_ending)):
+                content = (
+                    f"    code{line_ending}[missing](missing.md){line_ending}"
+                )
+                active_links = inline_link_targets(mask_ignored_markdown(content))
+
+                self.assertEqual(active_links, ["missing.md"])
 
     def test_link_shaped_text_in_inline_code_spans_is_ignored(self) -> None:
         (self.root / "README.md").write_text(

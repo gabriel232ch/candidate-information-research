@@ -70,6 +70,21 @@ def link_label_end(content: str, label_start: int) -> int | None:
     return index if label_depth == 0 else None
 
 
+def line_end(content: str, start: int) -> int:
+    """Return the first index after a line ending, preserving CRLF as one break."""
+    candidates = [
+        position
+        for position in (content.find("\n", start), content.find("\r", start))
+        if position != -1
+    ]
+    if not candidates:
+        return len(content)
+    newline = min(candidates)
+    if content[newline] == "\r" and content[newline + 1:newline + 2] == "\n":
+        return newline + 2
+    return newline + 1
+
+
 def mask_ignored_markdown(content: str) -> str:
     """Mask basic Markdown code and comment contexts before link extraction."""
     masked = list(content)
@@ -90,33 +105,32 @@ def mask_ignored_markdown(content: str) -> str:
     index = 0
     while index < len(masked):
         at_line_start = index == 0 or content[index - 1] in "\r\n"
-        line_end = content.find("\n", index) + 1
-        if line_end == 0:
-            line_end = len(content)
+        current_line_end = line_end(content, index)
 
         if at_line_start:
-            line = content[index:line_end].rstrip("\r\n")
+            line = content[index:current_line_end].rstrip("\r\n")
             fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
             if fence_match:
                 marker = fence_match.group(1)
-                fence_end = line_end
-                while fence_end < len(content):
-                    closing_end = content.find("\n", fence_end) + 1
-                    if closing_end == 0:
-                        closing_end = len(content)
-                    closing_line = content[fence_end:closing_end].rstrip("\r\n")
-                    fence_end = closing_end
-                    if re.match(
-                        rf"^ {{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*$",
-                        closing_line,
-                    ):
-                        break
-                mask(index, fence_end)
-                index = fence_end
-                continue
+                info_string = line[fence_match.end():]
+                invalid_backtick_info = marker[0] == "`" and "`" in info_string
+                if not invalid_backtick_info:
+                    fence_end = current_line_end
+                    while fence_end < len(content):
+                        closing_end = line_end(content, fence_end)
+                        closing_line = content[fence_end:closing_end].rstrip("\r\n")
+                        fence_end = closing_end
+                        if re.match(
+                            rf"^ {{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*$",
+                            closing_line,
+                        ):
+                            break
+                    mask(index, fence_end)
+                    index = fence_end
+                    continue
             if content.startswith(("    ", "\t"), index):
-                mask(index, line_end)
-                index = line_end
+                mask(index, current_line_end)
+                index = current_line_end
                 continue
 
         if content.startswith("<!--", index):
