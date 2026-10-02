@@ -131,6 +131,17 @@ class VerifyPublicArchiveTests(unittest.TestCase):
 
         self.assertEqual(self.verify(), 0)
 
+    def test_html_comment_opener_in_inline_code_does_not_hide_link(self) -> None:
+        (self.root / "README.md").write_text(
+            "`<!--` [missing](missing.md) -->\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
+
     def test_malformed_bracketed_url_fails_with_diagnostic(self) -> None:
         (self.root / "README.md").write_text(
             "[invalid](https://[host)\n", encoding="utf-8"
@@ -238,6 +249,16 @@ class VerifyPublicArchiveTests(unittest.TestCase):
         self.assertEqual(self.verify(), 0)
         (self.root / "references/report_(final).md").unlink()
         self.assertEqual(self.verify(), 1)
+
+    def test_escaped_parenthesized_reference_destination_resolves(self) -> None:
+        (self.root / "references/report_(final).md").write_text(
+            "# Report\n", encoding="utf-8"
+        )
+        (self.root / "README.md").write_text(
+            "[report]: references/report_\\(final\\).md\n", encoding="utf-8"
+        )
+
+        self.assertEqual(self.verify(), 0)
 
     def test_complete_archive_passes(self) -> None:
         self.assertEqual(self.verify(), 0)

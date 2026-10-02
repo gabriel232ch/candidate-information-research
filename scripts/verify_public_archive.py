@@ -79,39 +79,44 @@ def mask_ignored_markdown(content: str) -> str:
             if masked[index] not in "\r\n":
                 masked[index] = " "
 
-    offset = 0
-    fence: tuple[str, int] | None = None
-    for line in content.splitlines(keepends=True):
-        line_without_ending = line.rstrip("\r\n")
-        fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})", line_without_ending)
-        if fence is None and fence_match:
-            marker = fence_match.group(1)
-            fence = (marker[0], len(marker))
-            mask(offset, offset + len(line))
-        elif fence is not None:
-            marker_character, marker_length = fence
-            closing = re.match(
-                rf"^ {{0,3}}({re.escape(marker_character)}{{{marker_length},}})[ \t]*$",
-                line_without_ending,
-            )
-            mask(offset, offset + len(line))
-            if closing:
-                fence = None
-        elif line.startswith("    ") or line.startswith("\t"):
-            mask(offset, offset + len(line))
-        offset += len(line)
-
-    searchable = "".join(masked)
-    comment_start = searchable.find("<!--")
-    while comment_start != -1:
-        comment_end = searchable.find("-->", comment_start + 4)
-        comment_end = len(searchable) if comment_end == -1 else comment_end + 3
-        mask(comment_start, comment_end)
-        searchable = "".join(masked)
-        comment_start = searchable.find("<!--", comment_end)
-
     index = 0
     while index < len(masked):
+        at_line_start = index == 0 or content[index - 1] in "\r\n"
+        line_end = content.find("\n", index) + 1
+        if line_end == 0:
+            line_end = len(content)
+
+        if at_line_start:
+            line = content[index:line_end].rstrip("\r\n")
+            fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+            if fence_match:
+                marker = fence_match.group(1)
+                fence_end = line_end
+                while fence_end < len(content):
+                    closing_end = content.find("\n", fence_end) + 1
+                    if closing_end == 0:
+                        closing_end = len(content)
+                    closing_line = content[fence_end:closing_end].rstrip("\r\n")
+                    fence_end = closing_end
+                    if re.match(
+                        rf"^ {{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*$",
+                        closing_line,
+                    ):
+                        break
+                mask(index, fence_end)
+                index = fence_end
+                continue
+            if content.startswith(("    ", "\t"), index):
+                mask(index, line_end)
+                index = line_end
+                continue
+
+        if content.startswith("<!--", index):
+            comment_end = content.find("-->", index + 4)
+            comment_end = len(masked) if comment_end == -1 else comment_end + 3
+            mask(index, comment_end)
+            index = comment_end
+            continue
         if masked[index] != "`":
             index += 1
             continue
@@ -138,6 +143,42 @@ def mask_ignored_markdown(content: str) -> str:
     return "".join(masked)
 
 
+def markdown_destination(content: str, start: int) -> tuple[str | None, int]:
+    """Parse one escape-aware Markdown destination starting at ``start``."""
+    if start >= len(content):
+        return None, start
+    if content[start] == "<":
+        closing = content.find(">", start + 1)
+        if closing == -1:
+            return None, start + 1
+        return content[start + 1:closing], closing + 1
+
+    index = start
+    depth = 0
+    destination = []
+    while index < len(content):
+        char = content[index]
+        if char == "\\" and index + 1 < len(content):
+            index += 1
+            destination.append(content[index])
+        elif char == "(":
+            depth += 1
+            destination.append(char)
+        elif char == ")":
+            if depth == 0:
+                break
+            depth -= 1
+            destination.append(char)
+        elif char.isspace() and depth == 0:
+            break
+        else:
+            destination.append(char)
+        index += 1
+    if not destination or depth != 0:
+        return None, index
+    return "".join(destination), index
+
+
 def inline_link_targets(content: str) -> list[str]:
     """Extract destinations with balanced labels and parentheses."""
     targets = []
@@ -158,35 +199,9 @@ def inline_link_targets(content: str) -> list[str]:
             content_index = label_start + 1
             continue
 
-        index += 1
-        if index < len(content) and content[index] == "<":
-            closing = content.find(">", index + 1)
-            if closing != -1:
-                targets.append(content[index + 1:closing])
-            content_index = closing + 1 if closing != -1 else index + 1
-            continue
-        depth = 0
-        destination = []
-        while index < len(content):
-            char = content[index]
-            if char == "\\" and index + 1 < len(content):
-                index += 1
-                destination.append(content[index])
-            elif char == "(":
-                depth += 1
-                destination.append(char)
-            elif char == ")":
-                if depth == 0:
-                    break
-                depth -= 1
-                destination.append(char)
-            elif char.isspace() and depth == 0:
-                break
-            else:
-                destination.append(char)
-            index += 1
-        if destination and depth == 0:
-            targets.append("".join(destination))
+        target, index = markdown_destination(content, index + 1)
+        if target is not None:
+            targets.append(target)
         content_index = index + 1
     return targets
 
@@ -218,15 +233,9 @@ def reference_link_targets(content: str) -> list[str]:
             index = indentation
             if index >= len(line):
                 continue
-        if line[index] == "<":
-            closing = line.find(">", index + 1)
-            if closing != -1:
-                targets.append(line[index + 1:closing])
-            continue
-        closing = index
-        while closing < len(line) and not line[closing].isspace():
-            closing += 1
-        targets.append(line[index:closing])
+        target, _ = markdown_destination(line, index)
+        if target is not None:
+            targets.append(target)
     return targets
 
 
