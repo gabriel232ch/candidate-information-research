@@ -138,7 +138,11 @@ class VerifyPublicArchiveTests(unittest.TestCase):
             "`literal \\` [missing](missing.md) still code`\n", encoding="utf-8"
         )
 
-        self.assertEqual(self.verify(), 0)
+        self.assertEqual(self.verify(), 1)
+        self.assertIn(
+            "broken relative Markdown link: README.md -> missing.md",
+            self.verifier_output,
+        )
 
     def test_link_shaped_text_in_html_comments_is_ignored(self) -> None:
         (self.root / "README.md").write_text(

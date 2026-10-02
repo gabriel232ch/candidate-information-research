@@ -142,10 +142,7 @@ def mask_ignored_markdown(content: str) -> str:
             closing_end = closing_start
             while closing_end < len(masked) and masked[closing_end] == "`":
                 closing_end += 1
-            if (
-                not preceded_by_odd_backslashes(closing_start)
-                and closing_end - closing_start == marker_length
-            ):
+            if closing_end - closing_start == marker_length:
                 mask(opening_start, closing_end)
                 index = closing_end
                 break
